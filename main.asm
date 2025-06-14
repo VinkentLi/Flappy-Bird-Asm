@@ -28,7 +28,20 @@ global main
 %define SDL_RENDERER_ACCELERATED 0x00000002
 %define SDL_QUIT 0x100
 %define SDL_MOUSEBUTTONDOWN 0x401
+%define WIDTH 600
+%define HEIGHT 500
+%define PLAYER_SIZE 40
+%define PIPE_WIDTH 100
+%define PIPE_GAP 150
 %define GRAVITY 1
+
+; arg1: value, arg2: min, arg3: max, arg4: goto if fail
+%macro check_bounds 4
+    cmp %1, %2
+    jle %4
+    cmp %1, %3
+    jge %4
+%endmacro
 
 main:
     sub rsp, 56 ; shadow space for functions
@@ -41,8 +54,8 @@ main:
     lea rcx, [title]
     mov edx, SDL_WINDOWPOS_CENTERED ; centered x
     mov r8d, SDL_WINDOWPOS_CENTERED ; centered y
-    mov r9d, 600 ; width
-    mov dword [rsp+32], 500 ; height
+    mov r9d, WIDTH ; width
+    mov dword [rsp+32], HEIGHT ; height
     mov dword [rsp+40], SDL_WINDOW_SHOWN ; flags
     call SDL_CreateWindow
     cmp rax, 0 ; check if null
@@ -63,20 +76,26 @@ main:
     mov rcx, rax
     call srand
     ; init player
-    mov dword [player_y], 460 ; player_y will be halved
+%macro reset_player 0
+    mov dword [player_y], HEIGHT-PLAYER_SIZE ; player_y will be halved
     mov dword [player_y_velo], 0
     mov byte [player_dead], 0
+%endmacro
+    reset_player
     ; init pipes
-    mov dword [pipe1_x], 600
-    mov dword [pipe2_x], 900
+%macro reset_pipe_y 1 
     call rand
-    shr eax, 8 ; it's a range from 1-32767 divided by 128
-    sub eax, 314
-    mov dword [pipe1_y], eax
-    call rand
-    shr eax, 8
-    sub eax, 314
-    mov dword [pipe2_y], eax
+    shr eax, 8 ; it's a range from 1-32767 divided by 256
+    sub eax, HEIGHT-186
+    mov dword [%1], eax
+%endmacro
+%macro reset_pipes 0
+    mov dword [pipe1_x], WIDTH
+    mov dword [pipe2_x], WIDTH*3/2
+    reset_pipe_y pipe1_y
+    reset_pipe_y pipe2_y
+%endmacro
+    reset_pipes
 main_loop:
     call handle_events
     call update
@@ -111,20 +130,8 @@ poll_event:
     mov dword [player_y_velo], -16
     jmp poll_event
 revive_player:
-    mov byte [player_dead], 0
-    mov dword [player_y], 460
-    mov dword [player_y_velo], 0
-    ; reset pipes
-    mov dword [pipe1_x], 600
-    mov dword [pipe2_x], 900
-    call rand
-    shr eax, 6 
-    sub eax, 314
-    mov dword [pipe1_y], eax
-    call rand
-    shr eax, 6
-    sub eax, 314
-    mov dword [pipe2_y], eax
+    reset_player
+    reset_pipes
     jmp poll_event
 quit:
     mov r14b, 0 ; set game_running to false
@@ -147,21 +154,15 @@ update_game:
     sub eax, 2
     mov [pipe2_x], eax
     ; if pipe1 goes out of bounds, wrap around
-    cmp dword [pipe1_x], -100
+    cmp dword [pipe1_x], -PIPE_WIDTH
     jg try_move_pipe2
-    mov dword [pipe1_x], 600
-    call rand
-    shr eax, 8
-    sub eax, 314
-    mov dword [pipe1_y], eax
+    mov dword [pipe1_x], WIDTH
+    reset_pipe_y pipe1_y
 try_move_pipe2:
-    cmp dword [pipe2_x], -100
+    cmp dword [pipe2_x], -PIPE_WIDTH
     jg move_player
-    mov dword [pipe2_x], 600
-    call rand
-    shr eax, 8
-    sub eax, 314
-    mov dword [pipe2_y], eax
+    mov dword [pipe2_x], WIDTH
+    reset_pipe_y pipe2_y
 move_player:
     mov eax, [player_y_velo]
     add eax, GRAVITY
@@ -170,105 +171,78 @@ move_player:
     add eax, [player_y_velo]
     mov [player_y], eax
     ; if player goes out of bounds, kill
-    cmp eax, 0
-    jle kill_player
-    cmp eax, 920
-    jge kill_player
+    check_bounds eax, 0, 2*(HEIGHT-PLAYER_SIZE), kill_player
 pipe1_collisions:
-    cmp dword [pipe1_x], 320
-    jge pipe2_collisions
-    cmp dword [pipe1_x], 180
-    jle pipe2_collisions
-    mov ebx, [pipe1_y]
-    add ebx, 500
-    shl ebx, 1 ; double y to match player
-    cmp eax, ebx
-    jl kill_player ; kill player if touching upper pipe
-    add ebx, 220
-    cmp eax, ebx
-    jg kill_player ; kill player if touching lower pipe
+    check_bounds dword [pipe1_x], (WIDTH-PLAYER_SIZE)/2-PIPE_WIDTH, (WIDTH+PLAYER_SIZE)/2, pipe2_collisions
+    mov eax, [pipe1_y]
+    add eax, HEIGHT ; upper pipe
+    shl eax, 1 ; double y to match player
+    mov ebx, eax
+    add ebx, 2*(PIPE_GAP-PLAYER_SIZE) ; lower pipe
+    check_bounds dword [player_y], eax, ebx, kill_player
 pipe2_collisions:
-    cmp dword [pipe2_x], 320
-    jge done_with_collisions
-    cmp dword [pipe2_x], 180
-    jle done_with_collisions
-    mov ebx, [pipe2_y]
-    add ebx, 500
-    shl ebx, 1 ; double y to match player
-    cmp eax, ebx
-    jl kill_player ; kill player if touching upper pipe
-    add ebx, 220
-    cmp eax, ebx
-    jg kill_player ; kill player if touching lower pipe
+    check_bounds dword [pipe2_x], (WIDTH-PLAYER_SIZE)/2-PIPE_WIDTH, (WIDTH+PLAYER_SIZE)/2, done_with_collisions
+    mov eax, [pipe2_y]
+    add eax, HEIGHT ; upper pipe
+    shl eax, 1 ; double y to match player
+    mov ebx, eax
+    add ebx, 2*(PIPE_GAP-PLAYER_SIZE) ; lower pipe
+    check_bounds dword [player_y], eax, ebx, kill_player
 done_with_collisions:
     ret
 kill_player:
     mov byte [player_dead], 1
     ret
 
+; args: r, g, b, a
+%macro set_color 4
+    mov rcx, r13 ; renderer param
+    mov dl, %1 ; red
+    mov r8b, %2 ; green
+    mov r9b, %3 ; blue
+    mov byte [rsp+32], %4 ; alpha
+    call SDL_SetRenderDrawColor
+%endmacro
+
+; x, y, w, h
+%macro draw_rect 4
+    mov dword [rsp+36], %1
+    mov dword [rsp+40], %2
+    mov dword [rsp+44], %3
+    mov dword [rsp+48], %4
+    mov rcx, r13
+    lea rdx, [rsp+36]
+    call SDL_RenderFillRect
+%endmacro
+
 render:
     sub rsp, 56 ; reserve space for shadow space and SDL_Rect (reused between player and pipes)
     ; set color to black
-    mov rcx, r13 ; renderer param
-    mov dl, 0x00 ; red
-    mov r8b, 0xaf ; green
-    mov r9b, 0xff ; blue
-    mov byte [rsp+32], 0xff ; alpha
+    set_color 0x00, 0xaf, 0xff, 0xff
     mov rcx, r13
-    call SDL_SetRenderDrawColor
     call SDL_RenderClear
     ; set color to green
-    mov rcx, r13 ; renderer param
-    mov dl, 0x00 ; red
-    mov r8b, 0xff ; green
-    mov r9b, 0x00 ; blue
-    mov byte [rsp+32], 0xff ; alpha
-    call SDL_SetRenderDrawColor
+    set_color 0x00, 0xff, 0x00, 0xff
     ; render pipe1
     mov eax, [pipe1_x]
     mov ebx, [pipe1_y]
-    mov dword [rsp+36], eax
-    mov dword [rsp+40], ebx
-    mov dword [rsp+44], 100
-    mov dword [rsp+48], 500
-    mov rcx, r13
-    lea rdx, [rsp+36]
-    call SDL_RenderFillRect
-    add ebx, 650
-    mov dword [rsp+40], ebx
-    mov rcx, r13
-    lea rdx, [rsp+36]
-    call SDL_RenderFillRect
+    draw_rect eax, ebx, PIPE_WIDTH, HEIGHT
+    add ebx, HEIGHT + PIPE_GAP
+    mov eax, [pipe1_x]
+    draw_rect eax, ebx, PIPE_WIDTH, HEIGHT
     ; render pipe2
     mov eax, [pipe2_x]
     mov ebx, [pipe2_y]
-    mov dword [rsp+36], eax
-    mov dword [rsp+40], ebx
-    mov rcx, r13
-    lea rdx, [rsp+36]
-    call SDL_RenderFillRect
-    add ebx, 650
-    mov dword [rsp+40], ebx
-    mov rcx, r13
-    lea rdx, [rsp+36]
-    call SDL_RenderFillRect
+    draw_rect eax, ebx, PIPE_WIDTH, HEIGHT
+    add ebx, HEIGHT + PIPE_GAP
+    mov eax, [pipe2_x]
+    draw_rect eax, ebx, PIPE_WIDTH, HEIGHT
     ; set color to yellow
-    mov rcx, r13 ; renderer param
-    mov dl, 0xff ; red
-    mov r8b, 0xff ; green
-    mov r9b, 0x00 ; blue
-    mov byte [rsp+32], 0xff ; alpha
-    call SDL_SetRenderDrawColor
+    set_color 0xff, 0xff, 0x00, 0xff
     ; draw rect
-    mov dword [rsp+36], 280
     mov eax, [player_y]
     sar eax, 1 ; halve player_y, this way calculations can be more precise without floating point numbers
-    mov dword [rsp+40], eax
-    mov dword [rsp+44], 40
-    mov dword [rsp+48], 40
-    mov rcx, r13
-    lea rdx, [rsp+36]
-    call SDL_RenderFillRect
+    draw_rect (WIDTH-PLAYER_SIZE)/2, eax, PLAYER_SIZE, PLAYER_SIZE
     mov rcx, r13
     call SDL_RenderPresent
     add rsp, 56 ; reset stack
