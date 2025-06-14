@@ -1,0 +1,7 @@
+.vscode/
+*.asm
+*.exe
+*.o
+*.obj
+*.a 
+*.dll
