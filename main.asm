@@ -34,6 +34,9 @@ global main
 %define PIPE_WIDTH 100
 %define PIPE_GAP 150
 %define GRAVITY 1
+%define window r12
+%define renderer r13
+%define game_running r14b
 
 ; arg1: value, arg2: min, arg3: max, arg4: goto if fail
 %macro check_bounds 4
@@ -43,12 +46,54 @@ global main
     jge %4
 %endmacro
 
+%macro reset_player 0
+    mov dword [player_y], HEIGHT-PLAYER_SIZE ; player_y will be halved
+    mov dword [player_y_velo], 0
+    mov byte [player_dead], 0
+%endmacro
+
+; arg1: pipe_y
+%macro reset_pipe_y 1 
+    call rand
+    shr eax, 8 ; it's a range from 1-32767 divided by 256
+    sub eax, HEIGHT-186
+    mov dword [%1], eax
+%endmacro
+
+%macro reset_pipes 0
+    mov dword [pipe1_x], WIDTH
+    mov dword [pipe2_x], WIDTH*3/2
+    reset_pipe_y pipe1_y
+    reset_pipe_y pipe2_y
+%endmacro
+
+; args: r, g, b, a
+%macro set_color 4
+    mov rcx, renderer ; renderer param
+    mov dl, %1 ; red
+    mov r8b, %2 ; green
+    mov r9b, %3 ; blue
+    mov byte [rsp+32], %4 ; alpha
+    call SDL_SetRenderDrawColor
+%endmacro
+
+; x, y, w, h
+%macro draw_rect 4
+    mov dword [rsp+36], %1
+    mov dword [rsp+40], %2
+    mov dword [rsp+44], %3
+    mov dword [rsp+48], %4
+    mov rcx, renderer
+    lea rdx, [rsp+36]
+    call SDL_RenderFillRect
+%endmacro
+
 main:
     sub rsp, 56 ; shadow space for functions
     ; init SDL
     mov ecx, SDL_INIT_VIDEO
     call SDL_Init
-    cmp eax, 0 ; check if successful
+    test eax, eax ; check if successful
     jnz failure ; if it fails, goto failure
     ; create window
     lea rcx, [title]
@@ -58,43 +103,24 @@ main:
     mov dword [rsp+32], HEIGHT ; height
     mov dword [rsp+40], SDL_WINDOW_SHOWN ; flags
     call SDL_CreateWindow
-    cmp rax, 0 ; check if null
+    test rax, rax ; check if null
     jz failure ; if it is, goto failure
-    mov r12, rax ; store window in r12
+    mov window, rax ; store window in r12
     ; create renderer
-    mov rcx, r12 ; window param
+    mov rcx, window ; window param
     mov edx, -1 ; index
     mov r8d, SDL_RENDERER_ACCELERATED ; flags
     call SDL_CreateRenderer
     test rax, rax ; test if renderer was made
     jz failure ; otherwise goto failure
-    mov r13, rax ; store renderer in r13
-    mov r14b, 1 ; store game_running
+    mov renderer, rax ; store renderer in r13
+    mov game_running, 1 ; store game_running
     ; init random
     mov rcx, 0 
     call time 
     mov rcx, rax
     call srand
-    ; init player
-%macro reset_player 0
-    mov dword [player_y], HEIGHT-PLAYER_SIZE ; player_y will be halved
-    mov dword [player_y_velo], 0
-    mov byte [player_dead], 0
-%endmacro
     reset_player
-    ; init pipes
-%macro reset_pipe_y 1 
-    call rand
-    shr eax, 8 ; it's a range from 1-32767 divided by 256
-    sub eax, HEIGHT-186
-    mov dword [%1], eax
-%endmacro
-%macro reset_pipes 0
-    mov dword [pipe1_x], WIDTH
-    mov dword [pipe2_x], WIDTH*3/2
-    reset_pipe_y pipe1_y
-    reset_pipe_y pipe2_y
-%endmacro
     reset_pipes
 main_loop:
     call handle_events
@@ -102,7 +128,7 @@ main_loop:
     call render
     mov ecx, 17
     call SDL_Delay ; delay for 17 ms for 60fps
-    test r14b, r14b ; check if game is still running
+    test game_running, game_running ; check if game is still running
     jnz main_loop
     ; quit
     call SDL_Quit
@@ -134,7 +160,7 @@ revive_player:
     reset_pipes
     jmp poll_event
 quit:
-    mov r14b, 0 ; set game_running to false
+    mov game_running, 0
     jmp quit_polling
 quit_polling:
     add rsp, 96 ; reset stack
@@ -194,32 +220,11 @@ kill_player:
     mov byte [player_dead], 1
     ret
 
-; args: r, g, b, a
-%macro set_color 4
-    mov rcx, r13 ; renderer param
-    mov dl, %1 ; red
-    mov r8b, %2 ; green
-    mov r9b, %3 ; blue
-    mov byte [rsp+32], %4 ; alpha
-    call SDL_SetRenderDrawColor
-%endmacro
-
-; x, y, w, h
-%macro draw_rect 4
-    mov dword [rsp+36], %1
-    mov dword [rsp+40], %2
-    mov dword [rsp+44], %3
-    mov dword [rsp+48], %4
-    mov rcx, r13
-    lea rdx, [rsp+36]
-    call SDL_RenderFillRect
-%endmacro
-
 render:
     sub rsp, 56 ; reserve space for shadow space and SDL_Rect (reused between player and pipes)
     ; set color to black
     set_color 0x00, 0xaf, 0xff, 0xff
-    mov rcx, r13
+    mov rcx, renderer
     call SDL_RenderClear
     ; set color to green
     set_color 0x00, 0xff, 0x00, 0xff
@@ -243,7 +248,7 @@ render:
     mov eax, [player_y]
     sar eax, 1 ; halve player_y, this way calculations can be more precise without floating point numbers
     draw_rect (WIDTH-PLAYER_SIZE)/2, eax, PLAYER_SIZE, PLAYER_SIZE
-    mov rcx, r13
+    mov rcx, renderer
     call SDL_RenderPresent
     add rsp, 56 ; reset stack
     ret
